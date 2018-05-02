@@ -1,4 +1,4 @@
-#Malik Abu-Kalokoh, CNN on Flower Data
+#Malik Abu-Kalokoh, 
 
 import os
 import sys
@@ -12,7 +12,7 @@ import tensorflow as tf
 import numpy as np
 import cv2
 from sklearn.model_selection import train_test_split
-from sklearn.utils import shuffle
+from sklearn.preprocessing import normalize
 
 sys.stderr = stderr
 np.random.seed(42)
@@ -31,9 +31,7 @@ def resize_with_pad(img, img_size):
     
     return np.pad(img, padding, 'constant')
 
-
 images = []
-labels = [] 
 
 for species in flower_types:
     index = flower_types.index(species)
@@ -46,84 +44,82 @@ for species in flower_types:
         img = resize_with_pad(img,160)
         images.append(img)
 
-        label = np.zeros(len(flower_types))
-        label[index] = 1.0
-        labels.append(label)
-
 images = np.array(images)
-labels = np.array(labels)
 
 
-
-images, labels = shuffle(images, labels)
+np.random.shuffle(images)
 h, w, d = images[0].shape
-image_flatsize = h*w*d
-num_classes = len(flower_types)
+n_features = h*w*d
 
-X_train, X_test, Y_train, Y_test = train_test_split(images,labels,test_size=0.1)
+mean, std = np.mean(images), np.std(images)
 
-BATCH_SIZE = 10
-USE_RELU = True
+def preprocess(img):
+    norm_img = (img - mean) / std
+    return norm_img
 
-def weight_variable(shape):
-    # From the mnist tutorial
-    initial = tf.truncated_normal(shape, stddev=0.1)
-    return tf.Variable(initial)
+def deprocess(norm_img):
+    img = (norm_img * std) + mean
+    return img
 
+X = tf.placeholder(tf.float32, shape = (None, n_features), name = "X")
 
-def bias_variable(shape):
-    initial = tf.constant(0.1, shape=shape)
-    return tf.Variable(initial)
+# Training Parameters
+learning_rate = 0.01
+num_steps = 30000
+batch_size = 256
 
-def fc_layer(previous, input_size, output_size):
-    W = weight_variable([input_size, output_size])
-    b = bias_variable([output_size])
-    return tf.matmul(previous, W) + b
+display_step = 1000
+examples_to_show = 10
 
+# Network Parameters
+num_hidden_1 = 256 # 1st layer num features
+num_hidden_2 = 128 # 2nd layer num features (the latent dim)
+num_input = n_features # MNIST data input (img shape: 28*28)
 
-def autoencoder(x):
-    # first fully connected layer with 50 neurons using tanh activation
-    l1 = tf.nn.tanh(fc_layer(x, image_flatsize, 50))
-    # second fully connected layer with 50 neurons using tanh activation
-    l2 = tf.nn.tanh(fc_layer(l1, 50, 50))
-    # third fully connected layer with 2 neurons
-    l3 = fc_layer(l2, 50, 2)
-    # fourth fully connected layer with 50 neurons and tanh activation
-    l4 = tf.nn.tanh(fc_layer(l3, 2, 50))
-    # fifth fully connected layer with 50 neurons and tanh activation
-    l5 = tf.nn.tanh(fc_layer(l4, 50, 50))
-    # readout layer
-    if USE_RELU:
-        out = tf.nn.relu(fc_layer(l5, 50, image_flatsize))
-    else:
-        out = fc_layer(l5, 50, image_flatsize)
-    # let's use an l2 loss on the output image
-    loss = tf.reduce_mean(tf.squared_difference(x, out))
-    return loss, out, l3
+X = tf.placeholder("float", [None, n_features])
 
+weights = {
+    'encoder_h1': tf.Variable(tf.random_normal([num_input, num_hidden_1])),
+    'encoder_h2': tf.Variable(tf.random_normal([num_hidden_1, num_hidden_2])),
+    'decoder_h1': tf.Variable(tf.random_normal([num_hidden_2, num_hidden_1])),
+    'decoder_h2': tf.Variable(tf.random_normal([num_hidden_1, num_input])),
+}
+biases = {
+    'encoder_b1': tf.Variable(tf.random_normal([num_hidden_1])),
+    'encoder_b2': tf.Variable(tf.random_normal([num_hidden_2])),
+    'decoder_b1': tf.Variable(tf.random_normal([num_hidden_1])),
+    'decoder_b2': tf.Variable(tf.random_normal([num_input])),
+}
 
-x = tf.placeholder(tf.float32, shape=[None, image_flatsize])
-loss, output, latent = autoencoder(x)
-train_step = tf.train.AdamOptimizer(1e-4).minimize(loss)
+def encoder(x):
+    # Encoder Hidden layer with sigmoid activation #1
+    layer_1 = tf.nn.sigmoid(tf.add(tf.matmul(x, weights['encoder_h1']),
+                                   biases['encoder_b1']))
+    # Encoder Hidden layer with sigmoid activation #2
+    layer_2 = tf.nn.sigmoid(tf.add(tf.matmul(layer_1, weights['encoder_h2']),
+                                   biases['encoder_b2']))
+    return layer_2
 
-with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer())
-    total_batch = int(len(Y_train) / BATCH_SIZE)
-    for epoch in range(epochs):
-        X_train, Y_train = shuffle(X_train,Y_train)
-        avg_cost = 0
-        for i in range(0,len(Y_train),BATCH_SIZE):
-          if (BATCH_SIZE + i) < len(Y_train): 
-            end = i + BATCH_SIZE
-          else:
-            end = len(Y_train) - 1
-          
-          batch_x = X_train[i:end].reshape(end - i,image_flatsize) 
-          batch_y = Y_train[i:end]
-          _, c = sess.run([train_step, cross_entropy], feed_dict={X: batch_x, Y: batch_y})
-          avg_cost += c / total_batch
-        test_acc = sess.run(accuracy, feed_dict={X: X_test.reshape(len(Y_test),image_flatsize), Y: Y_test})
-        print("Epoch:", (epoch + 1), "cost =", "{:.3f}".format(avg_cost), "test accuracy: {:.3f}".format(test_acc))
+def decoder(x):
+    # Decoder Hidden layer with sigmoid activation #1
+    layer_1 = tf.nn.sigmoid(tf.add(tf.matmul(x, weights['decoder_h1']),
+                                   biases['decoder_b1']))
+    # Decoder Hidden layer with sigmoid activation #2
+    layer_2 = tf.nn.sigmoid(tf.add(tf.matmul(layer_1, weights['decoder_h2']),
+                                   biases['decoder_b2']))
+    return layer_2
 
-    print("\nTraining complete!")
-    print(sess.run(accuracy, feed_dict={X: X_test.reshape(len(Y_test),image_flatsize), Y: Y_test}))
+encoder_op = encoder(X)
+decoder_op = decoder(encoder_op)
+
+y_pred = decoder_op
+y_true = X
+
+loss = tf.metrics.mean_absolute_error(y_true,y_pred)
+optimizer = tf.train.RMSPropOptimizer(learning_rate).minimize(loss)
+
+init = tf.global_variables_initializer()
+
+def batch_iter(l, group_size):
+    for i in xrange(0, len(l), group_size):
+        yield l[i:i+group_size]
