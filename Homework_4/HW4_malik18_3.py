@@ -13,6 +13,7 @@ import numpy as np
 import cv2
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import normalize
+from sklearn.utils import shuffle
 
 sys.stderr = stderr
 np.random.seed(42)
@@ -31,6 +32,7 @@ def resize_with_pad(img, img_size):
     
     return np.pad(img, padding, 'constant')
 
+
 images = []
 
 for species in flower_types:
@@ -41,7 +43,7 @@ for species in flower_types:
     # Add them to the list
     for flower in all_flowers:
         img = cv2.imread(flower)
-        img = resize_with_pad(img,160)
+        img = resize_with_pad(img,112)
         images.append(img)
 
 images = np.array(images)
@@ -55,71 +57,77 @@ mean, std = np.mean(images), np.std(images)
 
 def preprocess(img):
     norm_img = (img - mean) / std
-    return norm_img
+    return norm_img 
 
-def deprocess(norm_img):
-    img = (norm_img * std) + mean
-    return img
+images = preprocess(images)
 
-X = tf.placeholder(tf.float32, shape = (None, n_features), name = "X")
+learning_rate = 0.001
+# Input and target placeholders
+inputs_ = tf.placeholder(tf.float32, (None, h,w,d), name="input")
+targets_ = tf.placeholder(tf.float32, (None, h,w,d), name="target")
 
-# Training Parameters
-learning_rate = 0.01
-num_steps = 30000
-batch_size = 256
+### Encoder
+conv1 = tf.layers.conv2d(inputs=inputs_, filters=16, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
+# Now hxwx16
+maxpool1 = tf.layers.max_pooling2d(conv1, pool_size=(2,2), strides=(2,2), padding='same')
+# Now h/2xw/2x16
+conv2 = tf.layers.conv2d(inputs=maxpool1, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
+# Now h/2xw/2x8
+maxpool2 = tf.layers.max_pooling2d(conv2, pool_size=(2,2), strides=(2,2), padding='same')
+# Now h/4xw/4x8
+conv3 = tf.layers.conv2d(inputs=maxpool2, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
+# Now h/4xw/4x8
+encoded = tf.layers.max_pooling2d(conv3, pool_size=(2,2), strides=(2,2), padding='same')
+# Now 4x4x8
 
-display_step = 1000
-examples_to_show = 10
+### Decoder
+upsample1 = tf.image.resize_images(encoded, size=(int(h/4),int(w/4)), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+# Now 7x7x8
+conv4 = tf.layers.conv2d(inputs=upsample1, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
+# Now 7x7x8
+upsample2 = tf.image.resize_images(conv4, size=(int(h/2),int(w/2)), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+# Now 14x14x8
+conv5 = tf.layers.conv2d(inputs=upsample2, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
+# Now 14x14x8
+upsample3 = tf.image.resize_images(conv5, size=(int(h),int(w)), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+# Now 28x28x8
+conv6 = tf.layers.conv2d(inputs=upsample3, filters=16, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
+# Now 28x28x16
 
-# Network Parameters
-num_hidden_1 = 256 # 1st layer num features
-num_hidden_2 = 128 # 2nd layer num features (the latent dim)
-num_input = n_features # MNIST data input (img shape: 28*28)
+logits = tf.layers.conv2d(inputs=conv6, filters=int(d), kernel_size=(3,3), padding='same', activation=None)
+#Now 28x28x1
 
-X = tf.placeholder("float", [None, n_features])
+# Pass logits through sigmoid to get reconstructed image
+decoded = tf.nn.sigmoid(logits)
 
-weights = {
-    'encoder_h1': tf.Variable(tf.random_normal([num_input, num_hidden_1])),
-    'encoder_h2': tf.Variable(tf.random_normal([num_hidden_1, num_hidden_2])),
-    'decoder_h1': tf.Variable(tf.random_normal([num_hidden_2, num_hidden_1])),
-    'decoder_h2': tf.Variable(tf.random_normal([num_hidden_1, num_input])),
-}
-biases = {
-    'encoder_b1': tf.Variable(tf.random_normal([num_hidden_1])),
-    'encoder_b2': tf.Variable(tf.random_normal([num_hidden_2])),
-    'decoder_b1': tf.Variable(tf.random_normal([num_hidden_1])),
-    'decoder_b2': tf.Variable(tf.random_normal([num_input])),
-}
+# Pass logits through sigmoid and calculate the cross-entropy loss
+loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=targets_, logits=logits)
 
-def encoder(x):
-    # Encoder Hidden layer with sigmoid activation #1
-    layer_1 = tf.nn.sigmoid(tf.add(tf.matmul(x, weights['encoder_h1']),
-                                   biases['encoder_b1']))
-    # Encoder Hidden layer with sigmoid activation #2
-    layer_2 = tf.nn.sigmoid(tf.add(tf.matmul(layer_1, weights['encoder_h2']),
-                                   biases['encoder_b2']))
-    return layer_2
+# Get cost and define the optimizer
+cost = tf.metrics.mean_absolute_error(loss,inputs_)
+opt = tf.train.AdamOptimizer(learning_rate).minimize(cost)
 
-def decoder(x):
-    # Decoder Hidden layer with sigmoid activation #1
-    layer_1 = tf.nn.sigmoid(tf.add(tf.matmul(x, weights['decoder_h1']),
-                                   biases['decoder_b1']))
-    # Decoder Hidden layer with sigmoid activation #2
-    layer_2 = tf.nn.sigmoid(tf.add(tf.matmul(layer_1, weights['decoder_h2']),
-                                   biases['decoder_b2']))
-    return layer_2
 
-encoder_op = encoder(X)
-decoder_op = decoder(encoder_op)
-
-y_pred = decoder_op
-y_true = X
-
-loss = tf.metrics.mean_absolute_error(y_true,y_pred)
-optimizer = tf.train.RMSPropOptimizer(learning_rate).minimize(loss)
+learning_rate = 0.0001
+epochs = 10
+batch_size = 10
 
 init = tf.global_variables_initializer()
 
-def batch_iter(l, group_size):
-    for i in xrange(0, len(l), group_size):
-        yield l[i:i+group_size]
+X_train, X_test = train_test_split(images,test_size=0.1)
+print("about to train")
+with tf.Session() as sess:
+    # initialise the variables
+    sess.run(init)
+    total_batch = int(len(X_train) / batch_size)
+    for e in range(epochs):
+        for ii in range(len(X_train)//batch_size):
+            batch = shuffle(X_train,n_samples=batch_size)
+            imgs = batch[0].reshape((-1, h, w, d))
+            batch_cost, _ = sess.run([cost, opt], feed_dict={inputs_: imgs,
+                                                         targets_: imgs})
+
+            print("Epoch: {}/{}...".format(e+1, epochs),"Training loss: {:.4f}".format(batch_cost))
+
+
+"python3 HW4_malik18_3.py ../../justinkterry/data/flowers"

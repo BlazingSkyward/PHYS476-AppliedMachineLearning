@@ -149,31 +149,3 @@ with tf.Session() as sess:
     print("\nTraining complete!")
     print(sess.run(accuracy, feed_dict={X: X_test.reshape(len(Y_test),image_flatsize), Y: Y_test}))
 
-
-"""
-images = []
-labels = [] #as np array
-
-species = flower_types[0]
-index = flower_types.index(species)
-# Get all the file names
-all_flowers_path = os.path.join(flowers_path,species ,'*g')
-all_flowers = glob.glob(all_flowers_path)
-flower = all_flowers[0]
-img = cv2.imread(flower)
-img = resize_with_pad(img,150)
-images.append(img)
-
-label = np.zeros(len(flower_types))
-label[index] = 1.0
-labels.append(label)
-"""
-
-"""
-images = np.array(images)
-labels = np.array(labels)
-
-
-images, labels = shuffle(images, labels)
-"""
-
