@@ -1,5 +1,6 @@
-#Malik Abu-Kalokoh, Adult Data Categorical
-#https://archive.ics.uci.edu/ml/datasets/adult
+"""
+This program is to analyze and test to see how videogames would sell based on  Rating, Genre, Platform, Publisher,etc
+"""
 
 import os
 import sys
@@ -12,28 +13,34 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
 import numpy as np
 import pandas as pd
-import numpy as np
 from sklearn.model_selection import train_test_split
 
 sys.stderr = stderr
 np.random.seed(42)
-TESTING = False
+TESTING = True
 
-filename = sys.argv[1] #should be adult.data
-names = ['age','workclass','fnlwgt','education','education-num','marital-status','occupation',
-            'relationship', 'race','sex','capital-gain','capital-loss','hours-per-week','native-country','wages']
+dataset = pd.read_csv("Video_Games_Sales_as_at_22_Dec_2016.csv",keep_default_na=True)
+ 
+dataset = dataset.loc[dataset.Year_of_Release < 2017] #Potential in 2017 not good since it only accounts for January
+dataset.Year_of_Release = dataset['Year_of_Release'].astype(int) #Convert Years to Int
+dataset = dataset[(dataset['Platform'] == 'PS3') | (dataset['Platform'] == 'PS4') | (dataset['Platform'] == 'X360') | (dataset['Platform'] == 'XOne') | (dataset['Platform'] == 'Wii') | (dataset['Platform'] == 'WiiU') | (dataset['Platform'] == 'PC')]
+dataset = dataset.dropna(subset=['Critic_Score'])
+dataset['Rating'] = dataset['Rating'].fillna(dataset['Rating'].mode()[0])
+dataset['Year_of_Release'] = dataset['Year_of_Release'].fillna(dataset['Year_of_Release'].median())
+dataset.replace('tbd',np.NaN,inplace=True,regex=True)
+dataset['User_Score'] = dataset['User_Score'].fillna(dataset['User_Score'].median())
+dataset['User_Count'] = dataset['User_Count'].fillna(dataset['User_Count'].median())
+dataset = dataset.drop(['Name', 'NA_Sales', 'Publisher','Developer','EU_Sales', 'JP_Sales', 'Other_Sales'], axis=1)
+dataset = pd.get_dummies(dataset, columns=['Platform','Genre','Rating'])
 
-dataset = pd.read_csv(filename, names=names,keep_default_na=True)
-
-Y = dataset['wages']
-Y = pd.get_dummies(Y, columns=['wages'])
-del dataset['wages']
-X = pd.get_dummies(dataset, columns=['workclass','education','marital-status','occupation','relationship', 'race','sex','native-country'])
-
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.1)
+Y = dataset[['Global_Sales']]
+del dataset['Global_Sales']
+X = dataset
 
 num_input = len(list(X))
-num_classes = len(list(Y))
+num_classes = 1
+
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.1)
 
 # Parameters
 learning_rate = 0.1
@@ -49,7 +56,7 @@ n_hidden_4 = 12
 
 # tf Graph input
 X = tf.placeholder("float", [None, num_input])
-Y = tf.placeholder("float", [None, num_classes])
+Y = tf.placeholder("float", [None,num_classes])
 
 weights = {
     'h1': tf.Variable(tf.random_normal([num_input, n_hidden_1])),
@@ -119,12 +126,9 @@ with tf.Session() as sess:
     if TESTING:
         print("Optimization Finished!")
 
-    # Calculate accuracy for MNIST test images
-    t_data = X_test
-    t_results = Y_test
     if TESTING:
         print("Testing Accuracy:",
-            sess.run(accuracy, feed_dict={X: t_data,Y: t_results}))
+            sess.run(accuracy, feed_dict={X: X_test,Y: Y_test}))
     else:
-        print(sess.run(accuracy, feed_dict={X: t_data,Y: t_results}))
+        print(sess.run(accuracy, feed_dict={X: X_test,Y: Y_test}))
 

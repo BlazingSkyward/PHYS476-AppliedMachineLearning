@@ -1,4 +1,5 @@
-#Malik Abu-Kalokoh, 
+#Malik Abu-Kalokoh, Flower Autoencoder using CNN and MAE
+#https://www.kaggle.com/alxmamaev/flowers-recognition
 
 import os
 import sys
@@ -9,6 +10,7 @@ sys.stderr = open('/dev/null', 'w')
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import tensorflow as tf
+import tensorflow.contrib.layers as lays
 import numpy as np
 import cv2
 from sklearn.model_selection import train_test_split
@@ -17,6 +19,7 @@ from sklearn.utils import shuffle
 
 sys.stderr = stderr
 np.random.seed(42)
+TESTING = False
 
 filename = sys.argv[1] #Should be parent directory of flowers 
 flowers_path = filename
@@ -61,73 +64,56 @@ def preprocess(img):
 
 images = preprocess(images)
 
-learning_rate = 0.001
+learning_rate = 0.01
 # Input and target placeholders
 inputs_ = tf.placeholder(tf.float32, (None, h,w,d), name="input")
 targets_ = tf.placeholder(tf.float32, (None, h,w,d), name="target")
 
-### Encoder
-conv1 = tf.layers.conv2d(inputs=inputs_, filters=16, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
-# Now hxwx16
-maxpool1 = tf.layers.max_pooling2d(conv1, pool_size=(2,2), strides=(2,2), padding='same')
-# Now h/2xw/2x16
-conv2 = tf.layers.conv2d(inputs=maxpool1, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
-# Now h/2xw/2x8
-maxpool2 = tf.layers.max_pooling2d(conv2, pool_size=(2,2), strides=(2,2), padding='same')
-# Now h/4xw/4x8
-conv3 = tf.layers.conv2d(inputs=maxpool2, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
-# Now h/4xw/4x8
-encoded = tf.layers.max_pooling2d(conv3, pool_size=(2,2), strides=(2,2), padding='same')
-# Now 4x4x8
+net = lays.conv2d(inputs_, 32, [5, 5], stride=2, padding='SAME')
+net = lays.conv2d(net, 16, [5, 5], stride=2, padding='SAME')
+net = lays.conv2d(net, 8, [5, 5], stride=4, padding='SAME')
 
-### Decoder
-upsample1 = tf.image.resize_images(encoded, size=(int(h/4),int(w/4)), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-# Now 7x7x8
-conv4 = tf.layers.conv2d(inputs=upsample1, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
-# Now 7x7x8
-upsample2 = tf.image.resize_images(conv4, size=(int(h/2),int(w/2)), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-# Now 14x14x8
-conv5 = tf.layers.conv2d(inputs=upsample2, filters=8, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
-# Now 14x14x8
-upsample3 = tf.image.resize_images(conv5, size=(int(h),int(w)), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-# Now 28x28x8
-conv6 = tf.layers.conv2d(inputs=upsample3, filters=16, kernel_size=(3,3), padding='same', activation=tf.nn.relu)
-# Now 28x28x16
+net = lays.conv2d_transpose(net, 16, [5, 5], stride=4, padding='SAME')
+net = lays.conv2d_transpose(net, 32, [5, 5], stride=2, padding='SAME')
+net = lays.conv2d_transpose(net, 3, [5, 5], stride=2, padding='SAME', activation_fn=tf.nn.tanh)
 
-logits = tf.layers.conv2d(inputs=conv6, filters=int(d), kernel_size=(3,3), padding='same', activation=None)
-#Now 28x28x1
+loss = tf.reduce_mean(tf.abs(net - inputs_))
+train_op = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss)
 
-# Pass logits through sigmoid to get reconstructed image
-decoded = tf.nn.sigmoid(logits)
-
-# Pass logits through sigmoid and calculate the cross-entropy loss
-loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=targets_, logits=logits)
-
-# Get cost and define the optimizer
-cost = tf.metrics.mean_absolute_error(loss,inputs_)
-opt = tf.train.AdamOptimizer(learning_rate).minimize(cost)
-
-
-learning_rate = 0.0001
-epochs = 10
-batch_size = 10
+learning_rate = 0.01
+epochs = 30
+batch_size = 50
 
 init = tf.global_variables_initializer()
 
 X_train, X_test = train_test_split(images,test_size=0.1)
-print("about to train")
+
+def batching(data,batch_size):
+    temp = shuffle(data)
+    for i in range(0,len(temp),batch_size):
+        if (batch_size + i) < len(temp): 
+            end = i + batch_size
+        else:
+            end = len(temp) - 1
+        yield temp[i:end]
+        
+
+if TESTING:
+    print("about to train")
 with tf.Session() as sess:
     # initialise the variables
     sess.run(init)
     total_batch = int(len(X_train) / batch_size)
     for e in range(epochs):
-        for ii in range(len(X_train)//batch_size):
-            batch = shuffle(X_train,n_samples=batch_size)
-            imgs = batch[0].reshape((-1, h, w, d))
-            batch_cost, _ = sess.run([cost, opt], feed_dict={inputs_: imgs,
-                                                         targets_: imgs})
+        avg_cost = 0
+        for curr in batching(X_train,batch_size):
+            curr = curr.reshape(-1,h,w,d)
+            _, batch_cost = sess.run([train_op, loss], feed_dict={inputs_: curr})
+            avg_cost += batch_cost/total_batch
+        if TESTING:
+            print("Epoch: {}/{}...".format(e+1, epochs),"Training loss: {:.4f}".format(avg_cost))
 
-            print("Epoch: {}/{}...".format(e+1, epochs),"Training loss: {:.4f}".format(batch_cost))
-
-
-"python3 HW4_malik18_3.py ../../justinkterry/data/flowers"
+    if TESTING:
+        print("Testing Accuracy:", 1 - sess.run(loss, feed_dict={inputs_: X_test.reshape((-1, h, w, d))}))
+    else: 
+        print(1 - sess.run(loss, feed_dict={inputs_: X_test.reshape((-1, h, w, d))}))
